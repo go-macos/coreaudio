@@ -344,3 +344,31 @@ func TestADeviceThatWillNotSayItsNameIsStillUsable(t *testing.T) {
 		t.Error("the nameless device cannot play, so it was not read at all")
 	}
 }
+
+// TestSilencingSomethingThatIsNotADevice.
+//
+// ⛔ ZERO IS NOT "NO DEVICE", it is kAudioObjectSystemObject -- so this asks the
+// system object itself for a capture mute switch, which it does not have. It is
+// the one input that reaches all four calls without touching a real microphone:
+// a read of a property that is not there changes nothing, and the refusal is
+// the same one a caller gets from a device with no controls.
+func TestSilencingSomethingThatIsNotADevice(t *testing.T) {
+	d := Device{Name: "the system object", Inputs: 1}
+	if _, err := d.Muted(); !errors.Is(err, ErrNoMute) {
+		t.Errorf("Muted() = %v, want ErrNoMute", err)
+	}
+	if err := d.SetMuted(true); !errors.Is(err, ErrNoMute) {
+		t.Errorf("SetMuted() = %v, want ErrNoMute", err)
+	}
+	if _, err := d.Volume(); !errors.Is(err, ErrNoVolume) {
+		t.Errorf("Volume() = %v, want ErrNoVolume", err)
+	}
+	if err := d.SetVolume(0.5); !errors.Is(err, ErrNoVolume) {
+		t.Errorf("SetVolume() = %v, want ErrNoVolume", err)
+	}
+	// And the questions answer no rather than failing, which is what lets a
+	// caller decide whether to offer the row at all.
+	if d.CanMute() || d.CanSetVolume() {
+		t.Error("the system object claims a capture control")
+	}
+}

@@ -31,6 +31,8 @@ var (
 	propUID           = fourCC("uid ") // kAudioDevicePropertyDeviceUID
 	propName          = fourCC("lnam") // kAudioObjectPropertyName
 	propStreams       = fourCC("stm#") // kAudioDevicePropertyStreams
+	propMute          = fourCC("mute") // kAudioDevicePropertyMute
+	propVolume        = fourCC("volm") // kAudioDevicePropertyVolumeScalar
 
 	scopeGlobal = fourCC("glob")
 	scopeInput  = fourCC("inpt")
@@ -57,6 +59,8 @@ var (
 
 	getPropertyData     func(obj uint32, addr *address, qualSize uint32, qual unsafe.Pointer, ioSize *uint32, out unsafe.Pointer) int32
 	getPropertyDataSize func(obj uint32, addr *address, qualSize uint32, qual unsafe.Pointer, outSize *uint32) int32
+	setPropertyData     func(obj uint32, addr *address, qualSize uint32, qual unsafe.Pointer, size uint32, in unsafe.Pointer) int32
+	hasProperty         func(obj uint32, addr *address) bool
 	release             func(ref uintptr)
 
 	caOpen = func(path string) (uintptr, error) {
@@ -65,6 +69,8 @@ var (
 	caBind = func(ca, cf uintptr) {
 		purego.RegisterLibFunc(&getPropertyData, ca, "AudioObjectGetPropertyData")
 		purego.RegisterLibFunc(&getPropertyDataSize, ca, "AudioObjectGetPropertyDataSize")
+		purego.RegisterLibFunc(&setPropertyData, ca, "AudioObjectSetPropertyData")
+		purego.RegisterLibFunc(&hasProperty, ca, "AudioObjectHasProperty")
 		purego.RegisterLibFunc(&release, cf, "CFRelease")
 	}
 )
@@ -157,6 +163,7 @@ func describe(id uint32) (Device, error) {
 		Name:    name,
 		Outputs: streams(id, scopeOutput),
 		Inputs:  streams(id, scopeInput),
+		id:      id,
 	}, nil
 }
 
@@ -228,4 +235,125 @@ type statusError struct {
 // it is not.
 func (e statusError) Error() string {
 	return fmt.Sprintf("%s: %s", e.op, statusText(e.status))
+}
+
+// muteAddress is where a device keeps the mute switch for one direction.
+//
+// ⚠ TWO ELEMENTS, AND WHICH ONE WORKS IS THE DEVICE'S BUSINESS. Element 0 is
+// the main one and is what a device with a single master switch answers on; a
+// device that mutes per channel answers on 1 and up and has nothing on 0. So
+// both are asked, in that order, and only a device that answers on NEITHER has
+// no mute.
+func muteAddress(dev uint32, scope uint32) (address, bool) {
+	for _, el := range []uint32{0, 1} {
+		a := address{selector: propMute, scope: scope, element: el}
+		if hasProperty(dev, &a) {
+			return a, true
+		}
+	}
+	return address{}, false
+}
+
+// platformCanMute reports whether the device has a mute switch for capture.
+func platformCanMute(d Device) bool {
+	if err := load(); err != nil || d.Inputs == 0 {
+		return false
+	}
+	_, ok := muteAddress(d.id, scopeInput)
+	return ok
+}
+
+// platformMuted reads the capture mute switch.
+func platformMuted(d Device) (bool, error) {
+	if err := load(); err != nil {
+		return false, err
+	}
+	a, ok := muteAddress(d.id, scopeInput)
+	if !ok {
+		return false, fmt.Errorf("%w: %s", ErrNoMute, d.Name)
+	}
+	var on uint32
+	if err := data(d.id, a, unsafe.Pointer(&on), uint32(unsafe.Sizeof(on))); err != nil {
+		return false, err
+	}
+	return on != 0, nil
+}
+
+// platformSetMuted writes it.
+func platformSetMuted(d Device, mute bool) error {
+	if err := load(); err != nil {
+		return err
+	}
+	a, ok := muteAddress(d.id, scopeInput)
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNoMute, d.Name)
+	}
+	var on uint32
+	if mute {
+		on = 1
+	}
+	if st := setPropertyData(d.id, &a, 0, nil, uint32(unsafe.Sizeof(on)), unsafe.Pointer(&on)); st != 0 {
+		return statusError{op: "AudioObjectSetPropertyData", status: st}
+	}
+	return nil
+}
+
+// volumeAddress is where a device keeps its capture level.
+//
+// ⚠ THE SAME TWO ELEMENTS AS THE MUTE SWITCH, and for the same reason: a
+// device with one master control answers on 0, a per-channel one on 1 and up.
+func volumeAddress(dev uint32, scope uint32) (address, bool) {
+	for _, el := range []uint32{0, 1} {
+		a := address{selector: propVolume, scope: scope, element: el}
+		if hasProperty(dev, &a) {
+			return a, true
+		}
+	}
+	return address{}, false
+}
+
+// platformCanSetVolume reports whether the device has a capture level to move.
+func platformCanSetVolume(d Device) bool {
+	if err := load(); err != nil || d.Inputs == 0 {
+		return false
+	}
+	_, ok := volumeAddress(d.id, scopeInput)
+	return ok
+}
+
+// platformVolume reads the capture level, 0 to 1.
+func platformVolume(d Device) (float32, error) {
+	if err := load(); err != nil {
+		return 0, err
+	}
+	a, ok := volumeAddress(d.id, scopeInput)
+	if !ok {
+		return 0, fmt.Errorf("%w: %s", ErrNoVolume, d.Name)
+	}
+	var v float32
+	if err := data(d.id, a, unsafe.Pointer(&v), uint32(unsafe.Sizeof(v))); err != nil {
+		return 0, err
+	}
+	return v, nil
+}
+
+// platformSetVolume writes it.
+func platformSetVolume(d Device, v float32) error {
+	if err := load(); err != nil {
+		return err
+	}
+	a, ok := volumeAddress(d.id, scopeInput)
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNoVolume, d.Name)
+	}
+	if v < 0 {
+		v = 0
+	}
+	if v > 1 {
+		v = 1
+	}
+	if st := setPropertyData(d.id, &a, 0, nil, uint32(unsafe.Sizeof(v)), unsafe.Pointer(&v)); st != 0 {
+		return statusError{op: "AudioObjectSetPropertyData", status: st}
+	}
+	return nil
 }

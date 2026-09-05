@@ -19,3 +19,21 @@ func Devices() ([]Device, error) { return nil, ErrUnsupported }
 
 // DefaultOutput reports [ErrUnsupported].
 func DefaultOutput() (Device, error) { return Device{}, ErrUnsupported }
+
+// platformCanMute reports no, because there is no device to ask.
+func platformCanMute(Device) bool { return false }
+
+// platformMuted reports [ErrUnsupported].
+func platformMuted(Device) (bool, error) { return false, ErrUnsupported }
+
+// platformSetMuted reports [ErrUnsupported].
+func platformSetMuted(Device, bool) error { return ErrUnsupported }
+
+// platformCanSetVolume reports no, because there is no device to ask.
+func platformCanSetVolume(Device) bool { return false }
+
+// platformVolume reports [ErrUnsupported].
+func platformVolume(Device) (float32, error) { return 0, ErrUnsupported }
+
+// platformSetVolume reports [ErrUnsupported].
+func platformSetVolume(Device, float32) error { return ErrUnsupported }

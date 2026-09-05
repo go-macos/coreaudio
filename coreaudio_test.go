@@ -5,6 +5,7 @@
 package coreaudio
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -107,5 +108,31 @@ func TestStatusTextNamesWhatCanBeNamed(t *testing.T) {
 	}
 	if got := statusText(-50); !strings.Contains(got, "-50") {
 		t.Errorf("statusText(-50) = %q, want it to give the number", got)
+	}
+}
+
+// TestTheTwoWaysToSilenceAreSeparateQuestions.
+//
+// ⭐ MEASURED, AND THE ANSWER IS NOT THE SAME FOR EVERY DEVICE. On the machine
+// this was written for: the MacBook's own microphone publishes BOTH a mute
+// switch and a capture level; the VITURE headset's microphone publishes
+// NEITHER, while every other input device on the machine publishes at least
+// one. So a caller offering "mute the microphone" has to ask, and has to be
+// able to say it cannot -- which is why there are two errors and two questions
+// rather than one boolean and a hope.
+func TestTheTwoWaysToSilenceAreSeparateQuestions(t *testing.T) {
+	if !errors.Is(ErrNoMute, ErrNoMute) || errors.Is(ErrNoMute, ErrNoVolume) {
+		t.Error("the two refusals cannot be told apart")
+	}
+	for _, e := range []error{ErrNoMute, ErrNoVolume} {
+		if !strings.HasPrefix(e.Error(), "coreaudio: ") {
+			t.Errorf("%v does not say which package refused", e)
+		}
+	}
+	// A device with no inputs has neither, whatever the platform: asking a
+	// loudspeaker to mute its microphone is a question about nothing.
+	out := Device{Name: "some speakers", Outputs: 2}
+	if out.CanMute() || out.CanSetVolume() {
+		t.Error("a device with no input claims a capture control")
 	}
 }

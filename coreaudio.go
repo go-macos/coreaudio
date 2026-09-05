@@ -18,7 +18,10 @@
 // it, which are not.
 package coreaudio
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // Device is one audio device the system knows about.
 type Device struct {
@@ -28,11 +31,21 @@ type Device struct {
 	UID string
 	// Name is the name shown in Sound settings.
 	Name string
-	// Outputs is how many output streams the device publishes, and Inputs how
-	// many input ones. A device is not necessarily either: a microphone has no
-	// outputs, and asking it to play sound would fail for a reason nobody would
-	// guess from "device not found".
+	// Outputs is how many output streams the device publishes, and
+	// Inputs is how many input ones. A device is not necessarily either: a
+	// microphone has no outputs, and asking it to play sound would fail for a
+	// reason nobody would guess from "device not found".
 	Outputs, Inputs int
+
+	// id is the AudioObjectID this device answers to.
+	//
+	// ⛔ UNEXPORTED, AND IT IS NOT AN IDENTITY. CoreAudio hands these out per
+	// boot and reuses them: a device unplugged and plugged back in may get a
+	// different one, and the one it had may belong to something else. So it is
+	// good for talking to a device you have JUST listed and for nothing else,
+	// which is exactly what [Device.Muted] and [Device.SetMuted] do -- while
+	// UID is what a setting stores.
+	id uint32
 }
 
 // CanPlay reports whether the device has anywhere to put sound.
@@ -87,3 +100,46 @@ func statusText(st int32) string {
 	}
 	return fmt.Sprintf("%q (OSStatus %d)", b, st)
 }
+
+// ErrNoMute says the device publishes no mute switch for capture.
+//
+// ⚠ IT IS COMMON, not exceptional. A mute switch is a property a device MAY
+// have: many capture devices publish none and are silenced by setting their
+// volume to zero instead, and some publish one per channel rather than a master
+// one. So a caller that offers "mute the microphone" has to be ready to say it
+// cannot, in words, rather than to fail.
+var ErrNoMute = errors.New("coreaudio: this device has no capture mute switch")
+
+// CanMute reports whether the device has a capture mute switch to work.
+//
+// ⛔ ASK BEFORE OFFERING. A menu row or a key that silently does nothing is
+// worse than one that is not there: it gets pressed again.
+func (d Device) CanMute() bool { return platformCanMute(d) }
+
+// Muted reads the device's capture mute switch.
+//
+// ⛔ READ BEFORE WRITING, always. A key that means "mute" is pressed blind, and
+// the only thing that knows whether the microphone is already off is the
+// device -- a person may have used the switch on the hardware, or another
+// application, since anything here last looked.
+func (d Device) Muted() (bool, error) { return platformMuted(d) }
+
+// SetMuted turns the device's capture mute switch on or off.
+func (d Device) SetMuted(mute bool) error { return platformSetMuted(d, mute) }
+
+// ErrNoVolume says the device publishes no capture level.
+var ErrNoVolume = errors.New("coreaudio: this device has no capture level")
+
+// CanSetVolume reports whether the device has a capture level to move.
+//
+// ⭐ IT IS THE OTHER WAY TO SILENCE A MICROPHONE, and on some devices the only
+// one: measured on this machine, the MacBook's own microphone has a mute switch
+// and the VITURE headset's has none. A caller that offers "mute the microphone"
+// should ask for [Device.CanMute] first and fall back to setting this to zero.
+func (d Device) CanSetVolume() bool { return platformCanSetVolume(d) }
+
+// Volume reads the device's capture level, 0 to 1.
+func (d Device) Volume() (float32, error) { return platformVolume(d) }
+
+// SetVolume writes it, clamped to 0..1.
+func (d Device) SetVolume(v float32) error { return platformSetVolume(d, v) }
